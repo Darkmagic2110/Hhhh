@@ -17,7 +17,8 @@
     .modal-content { background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 400px; }
     .modal-content input { width: 100%; padding: 10px; margin-bottom: 12px; }
     .modal-content button { width: 100%; padding: 12px; background: #2d8cff; color: white; border: none; border-radius: 6px; }
-    .transaction, .withdraw-request { background: white; margin: 10px auto; padding: 12px; width: 90%; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); }
+    .request { background: white; margin: 10px auto; padding: 12px; width: 90%; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); }
+    .bold-label { font-weight: bold; }
   </style>
 </head>
 <body>
@@ -32,13 +33,10 @@
   <div class="actions">
     <button onclick="openModal('sendModal')">Send to 2PAY</button>
     <button onclick="openModal('depositModal')">Deposit</button>
-    <button onclick="location.href='withdraw.html'">Withdraw</button>
-  </div>
-  <div id="withdrawRequests">
-    <h3 style="padding: 0 20px;">Withdrawal Requests</h3>
-  </div>
-  <div id="txList">
-    <h3 style="padding: 0 20px;">Transactions</h3>
+    <button onclick="window.location.href='withdraw.html'">Withdraw</button>
+  </div>  <div class="balance-card">
+    <h3 class="bold-label">Withdraw Requests</h3>
+    <div id="requestList"></div>
   </div>  <!-- Send Modal -->  <div class="modal" id="sendModal">
     <div class="modal-content">
       <h3>Send to 2PAY</h3>
@@ -69,50 +67,94 @@
     const auth = firebase.auth();
     const db = firebase.database();
     let currentUser = null;
-    let userCountry = "";
 
     auth.onAuthStateChanged(user => {
-      if (!user) return;
+      if (!user) return window.location.href = 'index.html';
       currentUser = user;
       document.getElementById('user-email').textContent = user.email;
 
       const userRef = db.ref('users/' + user.uid);
       userRef.once('value').then(snapshot => {
-        const data = snapshot.val();
-        if (data) {
-          document.getElementById("balance").textContent = "$" + parseFloat(data.balance || 0).toFixed(2);
-          userCountry = data.country || "";
-          loadWithdrawRequests();
+        if (!snapshot.exists()) {
+          userRef.set({ email: user.email, balance: 0 });
+        } else {
+          currentUser.country = snapshot.val().country || '';
         }
-      });
-
-      db.ref('transactions/' + user.uid).on('child_added', snap => {
-        const tx = snap.val();
-        const div = document.createElement("div");
-        div.className = "transaction";
-        div.innerHTML = `${tx.type || 'Transfer'}: $${tx.amount} to ${tx.toEmail || 'Self'} <br><small>${new Date(tx.timestamp).toLocaleString()}</small>`;
-        document.getElementById("txList").appendChild(div);
+        loadUserData();
+        loadWithdrawalRequests();
+        checkActiveChat();
       });
     });
 
-    function loadWithdrawRequests() {
-      db.ref("withdrawals").on("child_added", snapshot => {
-        const req = snapshot.val();
-        if (!req || req.uid === currentUser.uid || req.acceptedBy) return;
-        if (req.country === userCountry) {
-          const div = document.createElement("div");
-          div.className = "withdraw-request";
-          div.innerHTML = `
-            <strong>Email:</strong> ${req.email || 'N/A'}<br>
-            <strong>Amount:</strong> $${req.amount || 0}<br>
-            <strong>Bank:</strong> ${req.bankName || 'N/A'}<br>
-            <strong>Account:</strong> ${req.accountNumber || 'N/A'}<br>
-            <small>${new Date(req.timestamp).toLocaleString()}</small><br>
-            <button onclick="acceptRequest('${snapshot.key}', '${req.uid}')">Accept</button>
-          `;
-          document.getElementById("withdrawRequests").appendChild(div);
+    function loadUserData() {
+      const balRef = db.ref('users/' + currentUser.uid + '/balance');
+      balRef.on('value', snap => {
+        const bal = snap.val() || 0;
+        document.getElementById("balance").textContent = "$" + parseFloat(bal).toFixed(2);
+      });
+    }
+
+    function loadWithdrawalRequests() {
+      db.ref("withdrawals").on("value", snap => {
+        document.getElementById("requestList").innerHTML = "";
+        snap.forEach(child => {
+          const r = child.val();
+          const key = child.key;
+          if (r.requester !== currentUser.uid && r.country === currentUser.country && r.status === "pending") {
+            const div = document.createElement("div");
+            div.className = "request";
+            div.innerHTML = `
+              <div><strong>Email:</strong> ${r.requesterEmail || 'N/A'}</div>
+              <div><strong>Amount:</strong> $${r.amount}</div>
+              <div><strong>Bank:</strong> ${r.bank || 'N/A'}</div>
+              <div><strong>Account:</strong> ${r.account || 'N/A'}</div>
+              <div><small>${new Date(r.timestamp).toLocaleString()}</small></div>
+              <button onclick="acceptRequest('${key}')">Accept</button>
+            `;
+            document.getElementById("requestList").appendChild(div);
+          }
+        });
+      });
+    }
+
+    function acceptRequest(key) {
+      const chatId = key + "_chat";
+      const ref = db.ref("withdrawals/" + key);
+      ref.transaction(req => {
+        if (req && req.status === "pending") {
+          req.status = "accepted";
+          req.acceptedBy = currentUser.uid;
+          req.acceptedEmail = currentUser.email;
+          req.chatId = chatId;
+        }
+        return req;
+      }, (error, committed) => {
+        if (committed) {
+          db.ref("chats/" + chatId).set({
+            requester: currentUser.uid,
+            acceptedBy: currentUser.uid,
+            messages: []
+          });
+          localStorage.setItem("activeChatId", chatId);
+          window.location.href = "chat.html?id=" + chatId;
         }
       });
+    }
+
+    function checkActiveChat() {
+      const chatId = localStorage.getItem("activeChatId");
+      if (chatId) {
+        db.ref("withdrawals").orderByChild("chatId").equalTo(chatId).once("value", snap => {
+          if (snap.exists()) {
+            const data = Object.values(snap.val())[0];
+            if (data.status === "accepted") {
+              window.location.href = "chat.html?id=" + chatId;
+            } else {
+              localStorage.removeItem("activeChatId");
+            }
+          }
+        });
+      }
     }
 
     function openModal(id) {
@@ -130,7 +172,7 @@
       if (!amount || !receiverEmail) return alert("Fill all fields correctly");
       const snapshot = await db.ref("users").orderByChild("email").equalTo(receiverEmail).once("value");
       if (!snapshot.exists()) return alert("Receiver not found");
-      const [toUid, toData] = Object.entries(snapshot.val())[0];
+      const [toUid] = Object.keys(snapshot.val());
 
       const senderBalRef = db.ref(`users/${currentUser.uid}/balance`);
       const receiverBalRef = db.ref(`users/${toUid}/balance`);
@@ -162,14 +204,6 @@
       ref.transaction(bal => (bal || 0) + amount);
       db.ref(`transactions/${currentUser.uid}`).push({ type: "Deposit", amount, timestamp: Date.now() });
       document.getElementById("depositModal").style.display = "none";
-    }
-
-    function acceptRequest(requestId, requesterUid) {
-      const update = { acceptedBy: currentUser.uid };
-      db.ref("withdrawals/" + requestId).update(update).then(() => {
-        alert("You have accepted this request.");
-        location.reload();
-      });
     }
   </script></body>
 </html>
