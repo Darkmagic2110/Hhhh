@@ -1,0 +1,175 @@
+<!DOCTYPE html><html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>2PAY Dashboard</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <style>
+    body { margin: 0; font-family: 'Segoe UI', sans-serif; background: #f4f6f9; }
+    .navbar { background-color: #1d2b64; color: white; padding: 16px 24px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+    .balance-card { background-color: white; margin: 20px auto; padding: 20px; width: 90%; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    .balance-card h2 { margin: 0 0 10px; color: #444; }
+    .balance { font-size: 28px; font-weight: bold; color: #2d8cff; }
+    .actions { margin: 20px auto; width: 90%; display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
+    .actions button { padding: 12px 24px; border: none; background-color: #2d8cff; color: white; border-radius: 6px; font-size: 16px; cursor: pointer; }
+    .modal { display: none; position: fixed; z-index: 10; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); justify-content: center; align-items: center; }
+    .modal-content { background: white; padding: 20px; border-radius: 10px; width: 90%; max-width: 400px; }
+    .modal-content input { width: 100%; padding: 10px; margin-bottom: 12px; }
+    .modal-content button { width: 100%; padding: 12px; background: #2d8cff; color: white; border: none; border-radius: 6px; }
+    .transaction, .withdraw-request { background: white; margin: 10px auto; padding: 12px; width: 90%; border-radius: 8px; box-shadow: 0 0 5px rgba(0,0,0,0.1); }
+  </style>
+</head>
+<body>
+  <div class="navbar">
+    2PAY
+    <span id="user-email">Loading...</span>
+  </div>
+  <div class="balance-card">
+    <h2>Available Balance</h2>
+    <div class="balance" id="balance">$0.00</div>
+  </div>
+  <div class="actions">
+    <button onclick="openModal('sendModal')">Send to 2PAY</button>
+    <button onclick="openModal('depositModal')">Deposit</button>
+    <button onclick="location.href='withdraw.html'">Withdraw</button>
+  </div>
+  <div id="withdrawRequests">
+    <h3 style="padding: 0 20px;">Withdrawal Requests</h3>
+  </div>
+  <div id="txList">
+    <h3 style="padding: 0 20px;">Transactions</h3>
+  </div>  <!-- Send Modal -->  <div class="modal" id="sendModal">
+    <div class="modal-content">
+      <h3>Send to 2PAY</h3>
+      <input type="number" id="sendAmount" placeholder="Enter amount" />
+      <input type="email" id="receiverEmail" placeholder="Enter receiver email" />
+      <button onclick="sendTo2Pay()">Send</button>
+    </div>
+  </div>
+  <!-- Deposit Modal -->
+  <div class="modal" id="depositModal">
+    <div class="modal-content">
+      <h3>Deposit</h3>
+      <input type="number" id="depositAmount" placeholder="Enter amount to deposit" />
+      <button onclick="depositFunds()">Deposit</button>
+    </div>
+  </div>  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDvFDByPPo9zgwKLdPaREz1OVMQCXmPfrs",
+      authDomain: "bets-d795d.firebaseapp.com",
+      databaseURL: "https://bets-d795d-default-rtdb.firebaseio.com",
+      projectId: "bets-d795d",
+      storageBucket: "bets-d795d.appspot.com",
+      messagingSenderId: "384386108287",
+      appId: "1:384386108287:android:d238a5ec8068d9bb9be84a"
+    };
+    firebase.initializeApp(firebaseConfig);
+
+    const auth = firebase.auth();
+    const db = firebase.database();
+    let currentUser = null;
+    let userCountry = "";
+
+    auth.onAuthStateChanged(user => {
+      if (!user) return;
+      currentUser = user;
+      document.getElementById('user-email').textContent = user.email;
+
+      const userRef = db.ref('users/' + user.uid);
+      userRef.once('value').then(snapshot => {
+        const data = snapshot.val();
+        if (data) {
+          document.getElementById("balance").textContent = "$" + parseFloat(data.balance || 0).toFixed(2);
+          userCountry = data.country || "";
+          loadWithdrawRequests();
+        }
+      });
+
+      db.ref('transactions/' + user.uid).on('child_added', snap => {
+        const tx = snap.val();
+        const div = document.createElement("div");
+        div.className = "transaction";
+        div.innerHTML = `${tx.type || 'Transfer'}: $${tx.amount} to ${tx.toEmail || 'Self'} <br><small>${new Date(tx.timestamp).toLocaleString()}</small>`;
+        document.getElementById("txList").appendChild(div);
+      });
+    });
+
+    function loadWithdrawRequests() {
+      db.ref("withdrawals").on("child_added", snapshot => {
+        const req = snapshot.val();
+        if (!req || req.uid === currentUser.uid || req.acceptedBy) return;
+        if (req.country === userCountry) {
+          const div = document.createElement("div");
+          div.className = "withdraw-request";
+          div.innerHTML = `
+            <strong>Email:</strong> ${req.email || 'N/A'}<br>
+            <strong>Amount:</strong> $${req.amount || 0}<br>
+            <strong>Bank:</strong> ${req.bankName || 'N/A'}<br>
+            <strong>Account:</strong> ${req.accountNumber || 'N/A'}<br>
+            <small>${new Date(req.timestamp).toLocaleString()}</small><br>
+            <button onclick="acceptRequest('${snapshot.key}', '${req.uid}')">Accept</button>
+          `;
+          document.getElementById("withdrawRequests").appendChild(div);
+        }
+      });
+    }
+
+    function openModal(id) {
+      document.getElementById(id).style.display = "flex";
+    }
+    window.onclick = function(event) {
+      ["sendModal", "depositModal"].forEach(id => {
+        if (event.target === document.getElementById(id)) document.getElementById(id).style.display = "none";
+      });
+    }
+
+    async function sendTo2Pay() {
+      const amount = parseFloat(document.getElementById("sendAmount").value);
+      const receiverEmail = document.getElementById("receiverEmail").value.trim();
+      if (!amount || !receiverEmail) return alert("Fill all fields correctly");
+      const snapshot = await db.ref("users").orderByChild("email").equalTo(receiverEmail).once("value");
+      if (!snapshot.exists()) return alert("Receiver not found");
+      const [toUid, toData] = Object.entries(snapshot.val())[0];
+
+      const senderBalRef = db.ref(`users/${currentUser.uid}/balance`);
+      const receiverBalRef = db.ref(`users/${toUid}/balance`);
+
+      senderBalRef.transaction(bal => {
+        if (!bal || bal < amount) return;
+        return bal - amount;
+      });
+      receiverBalRef.transaction(bal => (bal || 0) + amount);
+
+      const tx = {
+        from: currentUser.uid,
+        to: toUid,
+        toEmail: receiverEmail,
+        amount,
+        timestamp: Date.now()
+      };
+      db.ref(`transactions/${currentUser.uid}`).push({...tx, type: 'Sent'});
+      db.ref(`transactions/${toUid}`).push({...tx, type: 'Received'});
+
+      alert("Sent successfully");
+      document.getElementById("sendModal").style.display = "none";
+    }
+
+    function depositFunds() {
+      const amount = parseFloat(document.getElementById("depositAmount").value);
+      if (!amount || amount <= 0) return alert("Invalid amount");
+      const ref = db.ref(`users/${currentUser.uid}/balance`);
+      ref.transaction(bal => (bal || 0) + amount);
+      db.ref(`transactions/${currentUser.uid}`).push({ type: "Deposit", amount, timestamp: Date.now() });
+      document.getElementById("depositModal").style.display = "none";
+    }
+
+    function acceptRequest(requestId, requesterUid) {
+      const update = { acceptedBy: currentUser.uid };
+      db.ref("withdrawals/" + requestId).update(update).then(() => {
+        alert("You have accepted this request.");
+        location.reload();
+      });
+    }
+  </script></body>
+</html>
