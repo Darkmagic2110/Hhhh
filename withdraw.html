@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Withdraw - 2PAY</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9; padding: 20px; }
+    h2 { text-align: center; }
+    form { background: white; max-width: 400px; margin: auto; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    input, button { width: 100%; padding: 10px; margin: 10px 0; }
+    button { background-color: #2d8cff; color: white; border: none; border-radius: 5px; }
+  </style>
+</head>
+<body>
+  <h2>Withdraw Request</h2>
+  <form id="withdrawForm">
+    <input type="number" id="amount" placeholder="Amount (Minimum $10)" step="0.01" required />
+    <input type="text" id="bank" placeholder="Bank Name" required />
+    <input type="text" id="account" placeholder="Account Number" required />
+    <input type="text" id="country" placeholder="Your Country" required />
+    <button type="submit">Send Request</button>
+  </form>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDvFDByPPo9zgwKLdPaREz1OVMQCXmPfrs",
+      authDomain: "bets-d795d.firebaseapp.com",
+      databaseURL: "https://bets-d795d-default-rtdb.firebaseio.com",
+      projectId: "bets-d795d",
+      storageBucket: "bets-d795d.appspot.com",
+      messagingSenderId: "384386108287",
+      appId: "1:384386108287:android:d238a5ec8068d9bb9be84a"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const auth = firebase.auth();
+
+    let currentUser;
+
+    auth.onAuthStateChanged(user => {
+      if (user && user.email) {
+        currentUser = user;
+      } else {
+        setTimeout(() => {
+          alert("Please log in first");
+          window.location.href = "index.html";
+        }, 500);
+      }
+    });
+
+    document.getElementById("withdrawForm").addEventListener("submit", async function(e) {
+      e.preventDefault();
+      const amount = parseFloat(document.getElementById("amount").value);
+      const bank = document.getElementById("bank").value.trim();
+      const account = document.getElementById("account").value.trim();
+      const country = document.getElementById("country").value.trim();
+
+      if (isNaN(amount) || amount < 10) return alert("Minimum withdrawal amount is $10");
+
+      const balanceRef = db.ref("users/" + currentUser.uid + "/balance");
+      const balanceSnapshot = await balanceRef.once("value");
+      const balance = balanceSnapshot.val() || 0;
+
+      if (amount > balance) return alert("Insufficient balance");
+
+      const request = {
+        uid: currentUser.uid,
+        email: currentUser.email,
+        amount: parseFloat(amount),
+        bankName: bank,
+        accountNumber: account,
+        country: country,
+        status: "pending",
+        timestamp: Date.now()
+      };
+
+      const reqKey = db.ref("withdrawals").push().key;
+      await db.ref("withdrawals/" + reqKey).set(request);
+      await balanceRef.set(balance - amount);
+
+      alert("Your request has been sent successfully. You will be notified if a user accepts your request.");
+      window.location.href = "main.html";
+    });
+  </script>
+</body>
+</html>
