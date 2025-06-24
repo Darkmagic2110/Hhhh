@@ -1,0 +1,131 @@
+<!DOCTYPE html><html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Anonymous Chat - 2PAY</title>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f6f9; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+    header { background: #2d8cff; color: white; padding: 15px; text-align: center; font-size: 18px; }
+    #chatBox { flex: 1; overflow-y: auto; padding: 10px; background: #fff; }
+    .message { padding: 8px 12px; margin: 6px 0; border-radius: 8px; max-width: 80%; }
+    .me { background: #daf1ff; align-self: flex-end; }
+    .them { background: #eee; align-self: flex-start; }
+    #chatForm { display: flex; padding: 10px; background: #f0f0f0; }
+    #msg { flex: 1; padding: 10px; border: none; border-radius: 5px; }
+    #sendBtn { padding: 10px; background: #2d8cff; color: white; border: none; border-radius: 5px; margin-left: 8px; }
+    .actions { padding: 10px; background: #fff; text-align: center; border-top: 1px solid #ccc; }
+    .actions button { margin: 5px; padding: 10px 15px; border: none; background: #2d8cff; color: white; border-radius: 6px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>Anonymous Chat</header>
+  <div id="chatBox"></div>
+  <div class="actions">
+    <button onclick="cancelTransaction()">Cancel Transaction</button>
+    <button onclick="markAsReceived()">Funds Received</button>
+    <button onclick="releaseFunds()">Release Funds</button>
+  </div>
+  <form id="chatForm">
+    <input id="msg" placeholder="Type a message..." />
+    <button type="submit" id="sendBtn">Send</button>
+  </form>  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyDvFDByPPo9zgwKLdPaREz1OVMQCXmPfrs",
+      authDomain: "bets-d795d.firebaseapp.com",
+      databaseURL: "https://bets-d795d-default-rtdb.firebaseio.com",
+      projectId: "bets-d795d",
+      storageBucket: "bets-d795d.appspot.com",
+      messagingSenderId: "384386108287",
+      appId: "1:384386108287:android:d238a5ec8068d9bb9be84a"
+    };
+    firebase.initializeApp(firebaseConfig);
+
+    const auth = firebase.auth();
+    const db = firebase.database();
+    let currentUser;
+    let chatId = new URLSearchParams(location.search).get("id");
+
+    auth.onAuthStateChanged(user => {
+      if (!user) return location.href = "index.html";
+      currentUser = user;
+      loadChat();
+      checkEscalation();
+    });
+
+    function loadChat() {
+      const chatRef = db.ref("chats/" + chatId + "/messages");
+      chatRef.on("child_added", snap => {
+        const msg = snap.val();
+        const div = document.createElement("div");
+        div.className = "message " + (msg.sender === currentUser.uid ? "me" : "them");
+        div.textContent = msg.text;
+        document.getElementById("chatBox").appendChild(div);
+        document.getElementById("chatBox").scrollTop = document.getElementById("chatBox").scrollHeight;
+      });
+    }
+
+    document.getElementById("chatForm").addEventListener("submit", function(e) {
+      e.preventDefault();
+      const text = document.getElementById("msg").value.trim();
+      if (!text) return;
+      const ref = db.ref("chats/" + chatId + "/messages");
+      ref.push({ sender: currentUser.uid, text, timestamp: Date.now() });
+      document.getElementById("msg").value = "";
+    });
+
+    function cancelTransaction() {
+      if (confirm("Are you sure you want to cancel this transaction?")) {
+        db.ref("withdrawals").orderByChild("chatId").equalTo(chatId).once("value", snap => {
+          const key = Object.keys(snap.val())[0];
+          const req = snap.val()[key];
+          if (req.requester === currentUser.uid) {
+            db.ref("withdrawals/" + key + "/status").set("cancelled");
+            alert("Transaction cancelled.");
+            endChat();
+          }
+        });
+      }
+    }
+
+    function markAsReceived() {
+      alert("You marked funds as received.");
+    }
+
+    function releaseFunds() {
+      db.ref("withdrawals").orderByChild("chatId").equalTo(chatId).once("value", async snap => {
+        const key = Object.keys(snap.val())[0];
+        const req = snap.val()[key];
+        if (req.requester === currentUser.uid) {
+          const acceptUser = req.acceptedBy;
+          const amount = parseFloat(req.amount);
+          const bonus = amount * 1.2;
+          const ref = db.ref("users/" + acceptUser + "/balance");
+          await ref.transaction(bal => (bal || 0) + bonus);
+          await db.ref("withdrawals/" + key + "/status").set("completed");
+          alert("Funds released successfully.");
+          endChat();
+        }
+      });
+    }
+
+    function endChat() {
+      localStorage.removeItem("activeChatId");
+      location.href = "main.html";
+    }
+
+    function checkEscalation() {
+      db.ref("withdrawals").orderByChild("chatId").equalTo(chatId).once("value", snap => {
+        if (!snap.exists()) return;
+        const req = Object.values(snap.val())[0];
+        const now = Date.now();
+        const acceptedTime = req.timestamp || now;
+        if (req.status === "accepted" && now - acceptedTime > 2 * 60 * 60 * 1000) {
+          const moderatorEmail = "moderator@example.com"; // Replace later
+          alert("Moderator has been notified about this transaction delay.");
+        }
+      });
+    }
+  </script></body>
+</html>
